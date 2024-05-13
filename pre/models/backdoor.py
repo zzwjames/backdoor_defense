@@ -554,10 +554,10 @@ class Backdoor:
         
         if test==True:
             # state_dict = torch.load('model_weights.pth')
-            # state_dict = torch.load('./model_weights_cora.pth')
+            state_dict = torch.load('./model_weights_cora.pth')
             # state_dict = torch.load('/home/zbz5349/defense_backdoor/DPGBA/kdd-backdooor/run/model_weights_pubmed.pth')
             # state_dict = torch.load('/home/zbz5349/defense_backdoor/DPGBA/kdd-backdooor/run/model_weights_cora.pth')
-            state_dict = torch.load('/home/zbz5349/defense_backdoor/DPGBA/kdd-backdooor/run/model_weights_arxiv.pth')
+            # state_dict = torch.load('/home/zbz5349/defense_backdoor/DPGBA/kdd-backdooor/run/model_weights_arxiv.pth')
             # state_dict = torch.load('/home/zbz5349/defense_backdoor/DPGBA/kdd-backdooor/run/model_weights_flicker.pth')
             # state_dict = torch.load('./model_weights_arxiv.pth')
             # state_dict = torch.load('./UGBA/model_weights_pubmed.pth')
