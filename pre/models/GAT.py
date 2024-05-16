@@ -66,6 +66,7 @@ class GAT(nn.Module):
         else:
             self._train_with_val(self.labels, idx_train, idx_val, train_iters, verbose)
 
+
     def _train_without_val(self, labels, idx_train, train_iters, verbose):
         self.train()
         optimizer = optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
