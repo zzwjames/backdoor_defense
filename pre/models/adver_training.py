@@ -26,11 +26,11 @@ class AdvTraining(nn.Module):
         x, edge_index, edge_weight = x.clone().detach(), edge_index.clone().detach(), edge_weight.clone().detach()
         return x, edge_index, edge_weight
     
-    def adversarial_attack(self, x, edge_index, edge_weight, idx_2b_attach):
+    def adversarial_attack(self, x, edge_index, edge_weight, idx_attach_candidates):
         # randomly select node for poisoning
         self.trigger_generator.trojan.eval()
-        num_inject = len(idx_2b_attach)
-        idx_attach = hs.obtain_attach_nodes(self.args,idx_2b_attach,size = num_inject)
+        num_inject = len(idx_attach_candidates)
+        idx_attach = hs.obtain_attach_nodes(self.args,idx_attach_candidates,size = num_inject)
 
         adv_x, adv_edge_index, adv_edge_weight = self.inject_trigger(x, edge_index, edge_weight, idx_attach)
         return adv_x, adv_edge_index, adv_edge_weight
