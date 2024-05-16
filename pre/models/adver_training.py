@@ -9,35 +9,32 @@ import torch.optim as optim
 import utils
 from copy import deepcopy
 
+import heuristic_selection as hs
 
-class RS(nn.Module):
-    def __init__(self, model_name, model, prob_drop, device):
-        super(RS, self).__init__()
+class AdvTraining(nn.Module):
+    def __init__(self, args, model_name, model, trigger_generator, device):
+        super(AdvTraining, self).__init__()
+        self.args = args
         self.model_name = model_name
-        self.prob_drop = prob_drop
-        assert 0 < prob_drop < 1, "prob_drop must be between 0 and 1 (exclusive)"
+        self.trigger_generator = trigger_generator
         self.model = model
         self.device = device
 
-    def sample_noise_all(self, prob_drop, edge_index, edge_weight,device):
-        prob_retain = 1 - prob_drop
-        noisy_edge_index = edge_index.clone().detach()
-        if(edge_weight == None):
-            noisy_edge_weight = torch.ones([noisy_edge_index.shape[1],]).to(device)
-        else:
-            noisy_edge_weight = edge_weight.clone().detach()
-        # # rand_noise_data = copy.deepcopy(data)
-        # rand_noise_data.edge_weight = torch.ones([rand_noise_data.edge_index.shape[1],]).to(device)
-        m = Bernoulli(torch.tensor([prob_retain]).to(device))
-        mask = m.sample(noisy_edge_weight.shape).squeeze(-1).int()
-        rand_inputs = torch.randint_like(noisy_edge_weight, low=0, high=2).squeeze().int().to(device)
-        # print(rand_noise_data.edge_weight.shape,mask.shape)
-        noisy_edge_weight = noisy_edge_weight * mask #+ rand_inputs * (1-mask)
-            
-        if(noisy_edge_weight!=None):
-            noisy_edge_index = noisy_edge_index[:,noisy_edge_weight.nonzero().flatten().long()]
-            noisy_edge_weight = torch.ones([noisy_edge_index.shape[1],]).to(device)
-        return noisy_edge_index, noisy_edge_weight
+    def inject_trigger(self, x, edge_index, edge_weight, idx_inject):
+        x, edge_index, edge_weight = x.clone().detach(), edge_index.clone().detach(), edge_weight.clone().detach()
+        x, edge_index, edge_weight = self.trigger_generator.inject_trigger(idx_inject,x, edge_index, edge_weight,self.device)
+        x, edge_index, edge_weight = x.clone().detach(), edge_index.clone().detach(), edge_weight.clone().detach()
+        return x, edge_index, edge_weight
+    
+    def adversarial_attack(self, x, edge_index, edge_weight, idx_2b_attach):
+        # randomly select node for poisoning
+        self.trigger_generator.trojan.eval()
+        num_inject = len(idx_2b_attach)
+        idx_attach = hs.obtain_attach_nodes(self.args,idx_2b_attach,size = num_inject)
+
+        adv_x, adv_edge_index, adv_edge_weight = self.inject_trigger(x, edge_index, edge_weight, idx_attach)
+        return adv_x, adv_edge_index, adv_edge_weight
+
     def forward(self, features, edge_index, edge_weight):
         if(self.model_name == 'GCN'):
             output, x = self.model.forward(features, edge_index, edge_weight)
@@ -46,7 +43,6 @@ class RS(nn.Module):
         else:
             raise NotImplementedError("No implemented model")
         return output
-        
 
     def fit(self, features, edge_index, edge_weight, labels, idx_train, idx_val=None, train_iters=200, verbose=False, finetune=False, attach=None):
         """Train the gcn model, when idx_val is not None, pick the best model according to the validation loss.
@@ -74,22 +70,24 @@ class RS(nn.Module):
     
         self.edge_index, self.edge_weight = edge_index, edge_weight
         self.features = features.to(self.device)
+
+        self.adv_x, self.adv_edge_index, self.adv_edge_weight= self.adversarial_attack(self.features, self.edge_index, self.edge_weight, idx_train)
         self.labels = labels.to(self.device)
         # self.prob_drop = prob_drop
 
         if idx_val is None:
-            self._train_without_val_with_RS(self.labels, idx_train, train_iters, verbose)
+            self._train_without_val_with_Adv(self.labels, idx_train, train_iters, verbose)
         else:
-            self._train_with_val_with_RS(self.labels, idx_train, idx_val, train_iters, verbose)
+            self._train_with_val_with_Adv(self.labels, idx_train, idx_val, train_iters, verbose)
 
-    def _train_without_val_with_RS(self, labels, idx_train, train_iters, verbose):
+    def _train_without_val_Adv(self, labels, idx_train, train_iters, verbose):
         self.model.train()
         optimizer = optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.weight_decay)
         for i in range(train_iters):
             optimizer.zero_grad()
 
-            rs_edge_index, rs_edge_weight = self.sample_noise_all(self.prob_drop, self.edge_index, self.edge_weight, self.device)
-            output = self.forward(self.features, rs_edge_index, rs_edge_weight)
+            # rs_edge_index, rs_edge_weight = self.sample_noise_all(self.prob_drop, self.edge_index, self.edge_weight, self.device)
+            output = self.forward(self.adv_x, self.adv_edge_index, self.adv_edge_weight)
 
             loss_train = F.nll_loss(output[idx_train], labels[idx_train])
             
@@ -99,10 +97,10 @@ class RS(nn.Module):
                 print('Epoch {}, training loss: {}'.format(i, loss_train.item()))
 
         self.model.eval()
-        output = self.forward(self.features, self.edge_index, self.edge_weight)
+        output = self.forward(self.adv_x, self.adv_edge_index, self.adv_edge_weight)
         self.output = output
 
-    def _train_with_val_with_RS(self, labels, idx_train, idx_val, train_iters, verbose):
+    def _train_with_val_with_Adv(self, labels, idx_train, idx_val, train_iters, verbose):
         if verbose:
             print('=== training gnn model ===')
         optimizer = optim.Adam(self.model.parameters(), lr=self.model.lr, weight_decay=self.model.weight_decay)
@@ -112,11 +110,12 @@ class RS(nn.Module):
 
         for i in range(train_iters):
             self.model.train()
+            self.trigger_generator.trojan.eval()
             optimizer.zero_grad()
 
-            rs_edge_index, rs_edge_weight = self.sample_noise_all(self.prob_drop, self.edge_index, self.edge_weight, self.device)
+            # rs_edge_index, rs_edge_weight = self.sample_noise_all(self.prob_drop, self.edge_index, self.edge_weight, self.device)
 
-            output = self.forward(self.features, rs_edge_index, rs_edge_weight)
+            output = self.forward(self.adv_x, self.adv_edge_index, self.adv_edge_weight)
 
             loss_train = F.nll_loss(output[idx_train], labels[idx_train])
             loss_train.backward()
@@ -125,8 +124,8 @@ class RS(nn.Module):
 
 
             self.model.eval()
-            rs_edge_index, rs_edge_weight = self.sample_noise_all(self.prob_drop, self.edge_index, self.edge_weight, self.device)
-            output = self.forward(self.features, rs_edge_index, rs_edge_weight)
+            # rs_edge_index, rs_edge_weight = self.sample_noise_all(self.prob_drop, self.edge_index, self.edge_weight, self.device)
+            output = self.forward(self.adv_x, self.adv_edge_index, self.adv_edge_weight)
             loss_val = F.nll_loss(output[idx_val], labels[idx_val])
             acc_val = utils.accuracy(output[idx_val], labels[idx_val])
             
@@ -152,20 +151,18 @@ class RS(nn.Module):
         
         self.model.eval()
         with torch.no_grad():
-            rs_edge_index, rs_edge_weight = self.sample_noise_all(self.prob_drop, edge_index, edge_weight, self.device)
-            output = self.forward(features, rs_edge_index, rs_edge_weight)
+            output = self.forward(features, edge_index, edge_weight)
 
             acc_test = utils.accuracy(output[idx_test], labels[idx_test])
         return float(acc_test)
     
     def attack_evaluation(self, args, x, edge_index, edge_weight, labels, idx_atk, idx_clean_test):
-        rs_edge_index, rs_edge_weight = self.sample_noise_all(self.prob_drop, edge_index, edge_weight, self.device)
-        output = self.forward(x, rs_edge_index, rs_edge_weight)
+        output = self.forward(x, edge_index, edge_weight)
         train_attach_rate = (output.argmax(dim=1)[idx_atk]==args.target_class).float().mean()
         print("ASR: {:.4f}".format(train_attach_rate))
         asr = train_attach_rate
         flip_idx_atk = idx_atk[(labels[idx_atk] != args.target_class).nonzero().flatten()]
         flip_asr = (output.argmax(dim=1)[flip_idx_atk]==args.target_class).float().mean()
         print("Flip ASR: {:.4f}/{} nodes".format(flip_asr,flip_idx_atk.shape[0]))
-        ca = self.test(x,rs_edge_index,rs_edge_weight,labels,idx_clean_test)
+        ca = self.test(x,edge_index, edge_weight,labels,idx_clean_test)
         print("CA: {:.4f}".format(ca))
