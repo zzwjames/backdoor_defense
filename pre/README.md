@@ -34,12 +34,12 @@ trigger generator weight: './model_weights_arxiv.pth'
 
 defense_cora_DPGBA.ipynb
 
-trigger generator weight: '/home/zbz5349/defense_backdoor/DPGBA/kdd-backdooor/run/model_weights_cora.pth'
+trigger generator weight: '/model_weights_cora.pth'
 
 
 **PubMed**
 
 defense_pubmed_DPGBA.ipynb
 
-trigger generator weight: '/home/zbz5349/defense_backdoor/DPGBA/kdd-backdooor/run/model_weights_pubmed.pth'
+trigger generator weight: '/model_weights_pubmed.pth'
 
